@@ -1,0 +1,39 @@
+services:
+  - type: worker
+    name: laguerite-monitor
+    runtime: python
+    plan: starter          # Background workers are not available on Render's free tier.
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m laguerite.monitor
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+      - key: DATE
+        value: "2026-09-03"
+      - key: PARTY_SIZE
+        value: "6"
+      - key: EARLIEST_TIME
+        value: "14:00"
+      - key: LATEST_TIME
+        value: "16:00"
+      - key: MIN_CHECK_INTERVAL_SECONDS
+        value: "60"
+      - key: MAX_CHECK_INTERVAL_SECONDS
+        value: "300"
+      - key: STATE_FILE
+        value: "/var/data/state.json"
+      # Logs go to stdout, which Render collects. No log file needed.
+      - key: LOG_FILE
+        value: "none"
+      - key: NOTIFY_CHANNELS
+        value: "telegram"
+      # --- Secrets: set these in the Render dashboard, NOT here ---
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+    disk:
+      name: state
+      mountPath: /var/data
+      sizeGB: 1
