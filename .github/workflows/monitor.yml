@@ -63,10 +63,13 @@ jobs:
       - name: Persist state
         if: always()
         run: |
-          if [ -n "$(git status --porcelain state/)" ]; then
-            git config user.name  "laguerite-monitor"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add state/
+          git config user.name  "laguerite-monitor"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # state/ is in .gitignore (correct for local runs), so force-add it:
+          # without this the dedup state would reset every run and re-alert you
+          # every 5 minutes for the same table.
+          git add -f state/
+          if ! git diff --cached --quiet; then
             git commit -m "state: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
             # Another run may have landed first; rebase rather than fail.
             git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
