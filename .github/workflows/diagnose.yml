@@ -4,62 +4,63 @@ on:
   workflow_dispatch:
 
 jobs:
-  diagnose:
+  browser-path:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 10
     steps:
-      - name: Runner egress IP
-        run: curl -s https://api.ipify.org; echo
+      - uses: actions/checkout@v4
 
-      - name: A) API cold, no cookies
-        run: |
-          curl -sS -o /dev/null -w "HTTP %{http_code}\n" \
-            -H 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36' \
-            'https://www.sevenrooms.com/api-yoa/availability/widget/range?venue=lagueritecannes&time_slot=14%3A00&party_size=6&halo_size_interval=100&start_date=09-03-2026&num_days=1&channel=SEVENROOMS_WIDGET' || true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
 
-      - name: B) Load page first, then API with its cookies
+      - name: Install deps
         run: |
-          UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36'
-          curl -sS -c jar.txt -o /dev/null -w "page HTTP %{http_code}\n" -H "User-Agent: $UA" \
-            'https://www.sevenrooms.com/reservations/lagueritecannes' || true
-          echo "cookies captured: $(grep -vc '^#' jar.txt || echo 0)"
-          curl -sS -b jar.txt -c jar.txt -o body.txt -w "api  HTTP %{http_code}  %{size_download} bytes\n" \
-            -H "User-Agent: $UA" \
-            -H 'Accept: application/json, text/plain, */*' \
-            -H 'Referer: https://www.sevenrooms.com/reservations/lagueritecannes' \
-            -H 'X-Requested-With: XMLHttpRequest' \
-            'https://www.sevenrooms.com/api-yoa/availability/widget/range?venue=lagueritecannes&time_slot=14%3A00&party_size=6&halo_size_interval=100&start_date=09-03-2026&num_days=1&channel=SEVENROOMS_WIDGET' || true
-          echo "--- body head ---"; head -c 300 body.txt; echo
+          pip install -r requirements.txt
+          pip install playwright
 
-      - name: C) HTTP/1.1 instead of HTTP/2
-        run: |
-          curl -sS --http1.1 -o /dev/null -w "HTTP %{http_code}\n" \
-            -H 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36' \
-            'https://www.sevenrooms.com/api-yoa/availability/widget/range?venue=lagueritecannes&time_slot=14%3A00&party_size=6&halo_size_interval=100&start_date=09-03-2026&num_days=1&channel=SEVENROOMS_WIDGET' || true
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-v1
 
-      - name: D) The other availability endpoint the widget uses
-        run: |
-          curl -sS -o d.txt -w "dates HTTP %{http_code}  %{size_download} bytes\n" \
-            -H 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36' \
-            'https://www.sevenrooms.com/api-yoa/availability/dates?venue=lagueritecannes&num_days=15&start_date=09-01-2026' || true
-          head -c 300 d.txt; echo
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
 
-      - name: E) Real headless Chromium driving the page
-        run: |
-          pip install playwright >/dev/null 2>&1
-          python -m playwright install --with-deps chromium >/dev/null 2>&1
-          python - <<'PY'
-          from playwright.sync_api import sync_playwright
-          got = []
-          with sync_playwright() as p:
-              b = p.chromium.launch(headless=True, args=["--no-sandbox"])
-              pg = b.new_page()
-              pg.on("response", lambda r: got.append((r.url.split("?")[0], r.status))
-                    if "api-yoa" in r.url else None)
-              pg.goto("https://www.sevenrooms.com/reservations/lagueritecannes",
-                      wait_until="domcontentloaded", timeout=60000)
-              pg.wait_for_timeout(8000)
-              b.close()
-          for u, s in got:
-              print(f"  {s}  {u}")
-          PY
+      - name: Direct API check (expected to fail from a datacenter IP)
+        continue-on-error: true
+        env:
+          NOTIFY_CHANNELS: console
+          DATE: "2026-09-03"
+          PARTY_SIZE: "6"
+          EARLIEST_TIME: "14:00"
+          LATEST_TIME: "16:00"
+          STATE_FILE: /tmp/a.json
+          LOG_FILE: none
+        run: python -m laguerite.monitor --once
+
+      - name: Browser check — drives the real booking form
+        env:
+          NOTIFY_CHANNELS: console
+          DATE: "2026-09-03"
+          PARTY_SIZE: "6"
+          EARLIEST_TIME: "14:00"
+          LATEST_TIME: "16:00"
+          STATE_FILE: /tmp/b.json
+          LOG_FILE: none
+          PLAYWRIGHT_TIMEOUT_MS: "60000"
+        run: python -m laguerite.monitor --browser --once
+
+      - name: Browser check against a date that HAS availability
+        env:
+          NOTIFY_CHANNELS: console
+          DATE: "2026-09-08"
+          PARTY_SIZE: "6"
+          EARLIEST_TIME: "14:00"
+          LATEST_TIME: "16:00"
+          STATE_FILE: /tmp/c.json
+          LOG_FILE: none
+          PLAYWRIGHT_TIMEOUT_MS: "60000"
+        run: python -m laguerite.monitor --browser --once
