@@ -6,33 +6,60 @@ on:
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 6
     steps:
       - name: Runner egress IP
         run: curl -s https://api.ipify.org; echo
 
-      - name: Availability endpoint (browser-like headers)
+      - name: A) API cold, no cookies
         run: |
-          curl -sS -o body.txt -w "HTTP %{http_code}  %{size_download} bytes\n" \
+          curl -sS -o /dev/null -w "HTTP %{http_code}\n" \
             -H 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36' \
-            -H 'Accept: application/json, text/plain, */*' \
-            -H 'Accept-Language: en-US,en;q=0.9' \
-            -H 'Referer: https://www.sevenrooms.com/reservations/lagueritecannes' \
             'https://www.sevenrooms.com/api-yoa/availability/widget/range?venue=lagueritecannes&time_slot=14%3A00&party_size=6&halo_size_interval=100&start_date=09-03-2026&num_days=1&channel=SEVENROOMS_WIDGET' || true
-          echo "--- first 600 bytes of body ---"
-          head -c 600 body.txt; echo
 
-      - name: Plain booking page
+      - name: B) Load page first, then API with its cookies
         run: |
-          curl -sS -o page.txt -w "HTTP %{http_code}  %{size_download} bytes\n" \
-            -H 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36' \
+          UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36'
+          curl -sS -c jar.txt -o /dev/null -w "page HTTP %{http_code}\n" -H "User-Agent: $UA" \
             'https://www.sevenrooms.com/reservations/lagueritecannes' || true
-          echo "--- first 300 bytes ---"
-          head -c 300 page.txt; echo
+          echo "cookies captured: $(grep -vc '^#' jar.txt || echo 0)"
+          curl -sS -b jar.txt -c jar.txt -o body.txt -w "api  HTTP %{http_code}  %{size_download} bytes\n" \
+            -H "User-Agent: $UA" \
+            -H 'Accept: application/json, text/plain, */*' \
+            -H 'Referer: https://www.sevenrooms.com/reservations/lagueritecannes' \
+            -H 'X-Requested-With: XMLHttpRequest' \
+            'https://www.sevenrooms.com/api-yoa/availability/widget/range?venue=lagueritecannes&time_slot=14%3A00&party_size=6&halo_size_interval=100&start_date=09-03-2026&num_days=1&channel=SEVENROOMS_WIDGET' || true
+          echo "--- body head ---"; head -c 300 body.txt; echo
 
-      - name: Response headers
+      - name: C) HTTP/1.1 instead of HTTP/2
         run: |
-          curl -sS -D - -o /dev/null \
+          curl -sS --http1.1 -o /dev/null -w "HTTP %{http_code}\n" \
             -H 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36' \
-            'https://www.sevenrooms.com/api-yoa/availability/widget/range?venue=lagueritecannes&time_slot=14%3A00&party_size=6&halo_size_interval=100&start_date=09-03-2026&num_days=1&channel=SEVENROOMS_WIDGET' \
-            | head -40 || true
+            'https://www.sevenrooms.com/api-yoa/availability/widget/range?venue=lagueritecannes&time_slot=14%3A00&party_size=6&halo_size_interval=100&start_date=09-03-2026&num_days=1&channel=SEVENROOMS_WIDGET' || true
+
+      - name: D) The other availability endpoint the widget uses
+        run: |
+          curl -sS -o d.txt -w "dates HTTP %{http_code}  %{size_download} bytes\n" \
+            -H 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36' \
+            'https://www.sevenrooms.com/api-yoa/availability/dates?venue=lagueritecannes&num_days=15&start_date=09-01-2026' || true
+          head -c 300 d.txt; echo
+
+      - name: E) Real headless Chromium driving the page
+        run: |
+          pip install playwright >/dev/null 2>&1
+          python -m playwright install --with-deps chromium >/dev/null 2>&1
+          python - <<'PY'
+          from playwright.sync_api import sync_playwright
+          got = []
+          with sync_playwright() as p:
+              b = p.chromium.launch(headless=True, args=["--no-sandbox"])
+              pg = b.new_page()
+              pg.on("response", lambda r: got.append((r.url.split("?")[0], r.status))
+                    if "api-yoa" in r.url else None)
+              pg.goto("https://www.sevenrooms.com/reservations/lagueritecannes",
+                      wait_until="domcontentloaded", timeout=60000)
+              pg.wait_for_timeout(8000)
+              b.close()
+          for u, s in got:
+              print(f"  {s}  {u}")
+          PY
