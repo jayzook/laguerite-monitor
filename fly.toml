@@ -1,0 +1,34 @@
+# Fly.io config. Deploy with:
+#   fly launch --no-deploy --copy-config
+#   fly volumes create laguerite_state --size 1 --region cdg
+#   fly secrets set TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=...
+#   fly deploy
+
+app = "laguerite-monitor"
+primary_region = "cdg"          # Paris — closest to Cannes.
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  RESTAURANT = "La Guerite Cannes"
+  DATE = "2026-09-03"
+  PARTY_SIZE = "6"
+  EARLIEST_TIME = "14:00"
+  LATEST_TIME = "16:00"
+  MIN_CHECK_INTERVAL_SECONDS = "60"
+  MAX_CHECK_INTERVAL_SECONDS = "300"
+  STATE_FILE = "/data/state.json"
+  LOG_FILE = "none"
+
+[mounts]
+  source = "laguerite_state"
+  destination = "/data"
+
+# A always-on worker: no HTTP service, and never scaled to zero.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+[processes]
+  app = "python -m laguerite.monitor"
