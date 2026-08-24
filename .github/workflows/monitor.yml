@@ -1,0 +1,76 @@
+name: La Guerite availability check
+
+# GitHub's minimum schedule granularity is 5 minutes, and scheduled runs can be
+# delayed when the platform is busy. That is the trade for free 24/7 hosting.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:        # lets you run it by hand from the Actions tab
+
+# Never let two runs race each other on the state file.
+concurrency:
+  group: laguerite-monitor
+  cancel-in-progress: false
+
+permissions:
+  contents: write           # needed to commit the state file back
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check availability
+        id: check
+        continue-on-error: true      # a transient network blip must not stop the schedule
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NOTIFY_CHANNELS: telegram
+          RESTAURANT: La Guerite Cannes
+          DATE: "2026-09-03"
+          PARTY_SIZE: "6"
+          EARLIEST_TIME: "14:00"
+          LATEST_TIME: "16:00"
+          VENUE_TIMEZONE: Europe/Paris
+          STATE_FILE: state/state.json
+          LOG_FILE: none
+          HEARTBEAT_HOURS: "24"
+          # One run per schedule tick, so the in-process interval is unused.
+          MIN_CHECK_INTERVAL_SECONDS: "60"
+          MAX_CHECK_INTERVAL_SECONDS: "300"
+        run: python -m laguerite.monitor --once
+
+      - name: Record history
+        if: always()
+        run: |
+          mkdir -p state
+          printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ) outcome=${{ steps.check.outcome }}" >> state/history.log
+          # Keep the history file from growing without bound.
+          tail -n 5000 state/history.log > state/history.tmp && mv state/history.tmp state/history.log
+
+      - name: Persist state
+        if: always()
+        run: |
+          if [ -n "$(git status --porcelain state/)" ]; then
+            git config user.name  "laguerite-monitor"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add state/
+            git commit -m "state: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            # Another run may have landed first; rebase rather than fail.
+            git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
+            git push origin "HEAD:${GITHUB_REF_NAME}" || echo "push skipped (will retry next run)"
+          else
+            echo "no state change"
+          fi
