@@ -1,0 +1,13 @@
+{
+  "booked": false,
+  "consecutive_failures": 1,
+  "criteria_fingerprint": "lagueritecannes|2026-09-03|6|14:00|16:00",
+  "last_check_at": "2026-08-24T15:03:37",
+  "last_error_notified_at": null,
+  "last_heartbeat_at": 1787583817.952568,
+  "last_success_at": null,
+  "notified_times": [],
+  "total_checks": 1,
+  "total_notifications": 0,
+  "version": 1
+}
